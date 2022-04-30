@@ -1,0 +1,2 @@
+: final_normal_warping_refine statistics: 0.130 0.067 0.056 0.331 0.165 0.000 0.859 1.970 0.614 0.292 0.366 0.376
+: final_normal_warping_refine statistics: 0.130 0.067 0.056 0.331 0.165 0.000 0.859 1.970 0.614 0.292 0.366 0.376
