@@ -199,8 +199,8 @@ class Bottleneck(nn.Module):
         return out
 
 class ResNet(nn.Module):
-
-    def __init__(self, architecture, stage5=False, numInputChannels=3):
+    #numInputChannels: 3->4
+    def __init__(self, architecture, stage5=False, numInputChannels=4):
         super(ResNet, self).__init__()
         assert architecture in ["resnet50", "resnet101"]
         self.inplanes = 64
@@ -1651,7 +1651,8 @@ class MaskRCNN(nn.Module):
 
     def predict(self, input, mode, use_nms=1, use_refinement=False, return_feature_map=False):
         molded_images = input[0]
-        image_metas = input[1]
+        molded_depths = input[1]
+        image_metas = input[2]
 
         if mode == 'inference':
             self.eval()
@@ -1666,7 +1667,8 @@ class MaskRCNN(nn.Module):
             self.apply(set_bn_eval)"""
 
         ## Feature extraction
-        [p2_out, p3_out, p4_out, p5_out, p6_out] = self.fpn(molded_images)  #torch.Size([1, 256, 160, 160]) torch.Size([1, 256, 10, 10])
+        molded_rgbds = torch.cat((molded_images, molded_depths),1)
+        [p2_out, p3_out, p4_out, p5_out, p6_out] = self.fpn(molded_rgbds)  #torch.Size([1, 256, 160, 160]) torch.Size([1, 256, 10, 10])
         ## Note that P6 is used in RPN, but not in the classifier heads.
 
         rpn_feature_maps = [p2_out, p3_out, p4_out, p5_out, p6_out]
@@ -1751,10 +1753,10 @@ class MaskRCNN(nn.Module):
 
         elif mode == 'training':
 
-            gt_class_ids = input[2]
-            gt_boxes = input[3]
-            gt_masks = input[4]
-            gt_parameters = input[5]
+            gt_class_ids = input[3]
+            gt_boxes = input[4]
+            gt_masks = input[5]
+            gt_parameters = input[6]
             
             ## Normalize coordinates
             h, w = self.config.IMAGE_SHAPE[:2]
@@ -1795,10 +1797,10 @@ class MaskRCNN(nn.Module):
             return [rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_deltas, mrcnn_bbox, target_mask, mrcnn_mask, target_parameters, mrcnn_parameters, rois, depth_np]
         
         elif mode in ['training_detection', 'inference_detection']:
-            gt_class_ids = input[2]
-            gt_boxes = input[3]
-            gt_masks = input[4]
-            gt_parameters = input[5]
+            gt_class_ids = input[3]
+            gt_boxes = input[4]
+            gt_masks = input[5]
+            gt_parameters = input[6]
             
             ## Normalize coordinates
             h, w = self.config.IMAGE_SHAPE[:2]

@@ -58,7 +58,7 @@ class Config(object):
     NUM_CLASSES = 1  # Override in sub-classes
 
     # The number of input channels
-    NUM_INPUT_CHANNELS = 3
+    NUM_INPUT_CHANNELS = 4
     
     # Length of square anchor side in pixels
     RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)

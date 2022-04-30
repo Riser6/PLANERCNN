@@ -27,7 +27,7 @@ from config import PlaneConfig
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+import torch.nn.functional as F
 
 os.environ[
         "TORCH_DISTRIBUTED_DEBUG"
@@ -66,13 +66,28 @@ def train(options):
     refine_model.cuda()
     refine_model.train()
 
+    depth_norm = torch.nn.InstanceNorm2d(1)
     
     if options.restore == 1:
         ## Resume training
         if local_rank in [-1, 0]:
             print('restore')
-            model.load_state_dict(torch.load(options.checkpoint_dir + '/checkpoint.pth'))
-            refine_model.load_state_dict(torch.load(options.checkpoint_dir + '/checkpoint_refine.pth'))
+            model_dict = model.state_dict()
+            checkpoint = torch.load(options.checkpoint_dir + '/checkpoint.pth')
+            checkpoint_dict = {k: v for k, v in checkpoint.items() if k not in ["fpn.C1.0.weight"]}
+            kernel1_weight_raw = checkpoint["fpn.C1.0.weight"]
+            checkpoint_dict["fpn.C1.0.weight"] = torch.cat((kernel1_weight_raw, torch.mean(kernel1_weight_raw, dim=1).unsqueeze(1)*100),1)
+            model_dict.update(checkpoint_dict)
+            model.load_state_dict(model_dict)
+
+            refine_model_dict = refine_model.state_dict()
+            refine_checkpoint = torch.load(options.checkpoint_dir + '/checkpoint_refine.pth')
+            refine_checkpoint_dict = {k: v for k, v in refine_checkpoint.items() if k not in ["refinement_net.refinement_block.conv_0.conv.weight"]}
+            refine_kernel1_weight_raw = refine_checkpoint["refinement_net.refinement_block.conv_0.conv.weight"]
+            refine_checkpoint_dict["refinement_net.refinement_block.conv_0.conv.weight"] = torch.cat((refine_kernel1_weight_raw[:,:3,...], torch.mean(refine_kernel1_weight_raw[:,:3,...], dim=1).unsqueeze(1)*100, refine_kernel1_weight_raw[:,3:,...],),1)
+            refine_model_dict.update(refine_checkpoint_dict)
+            refine_model.load_state_dict(refine_model_dict)
+
     elif options.restore == 2:
         ## Train upon Mask R-CNN weights
         if local_rank in [-1, 0]:
@@ -151,13 +166,17 @@ def train(options):
             camera = sample[30][0].cuda()                
             for indexOffset in [0, 13]:
                 images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, gt_plane, gt_segmentation, plane_indices = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda(), sample[indexOffset + 12].cuda()
+                noise_depth = gt_depth[:,3::8,3::8]
+                noise_depth = (noise_depth * torch.ones_like(noise_depth)+torch.randn_like(noise_depth)*0.15).unsqueeze(1)
+                noise_depth = depth_norm(noise_depth)
+                noise_depth = F.interpolate(noise_depth, scale_factor=8, mode='bilinear')
 
                 if indexOffset == 13:
                     input_pair.append({'image': images, 'depth': gt_depth, 'mask': gt_masks, 'bbox': gt_boxes, 'extrinsics': extrinsics, 'segmentation': gt_segmentation, 'plane': gt_plane, 'camera': camera})
                     continue
 
                 #results = model.module.predict([images, image_metas, gt_class_ids, gt_boxes, gt_masks, gt_parameters, camera], mode='training_detection', use_nms=2, use_refinement='refinement' in options.suffix, return_feature_map=True)
-                results = model.predict([images, image_metas, gt_class_ids, gt_boxes, gt_masks, gt_parameters, camera], mode='training_detection', use_nms=2, use_refinement='refinement' in options.suffix, return_feature_map=True)
+                results = model.predict([images, noise_depth, image_metas, gt_class_ids, gt_boxes, gt_masks, gt_parameters, camera], mode='training_detection', use_nms=2, use_refinement='refinement' in options.suffix, return_feature_map=True)
                 rpn_class_logits, rpn_pred_bbox, target_class_ids, mrcnn_class_logits, target_deltas, mrcnn_bbox, target_mask, mrcnn_mask, target_parameters, mrcnn_parameters, detections, detection_masks, detection_gt_parameters, detection_gt_masks, rpn_rois, roi_features, roi_indices, feature_map, depth_np_pred = results
                 
                 rpn_class_loss, rpn_bbox_loss, mrcnn_class_loss, mrcnn_bbox_loss, mrcnn_mask_loss, mrcnn_parameter_loss = compute_losses(config, rpn_match, rpn_bbox, rpn_class_logits, rpn_pred_bbox, target_class_ids, mrcnn_class_logits, target_deltas, mrcnn_bbox, target_mask, mrcnn_mask, target_parameters, mrcnn_parameters)
@@ -234,6 +253,9 @@ def train(options):
                 segmentation = input_dict['segmentation']
                 plane_depth = detection_dict['depth']
                 depth_np = detection_dict['depth_np']
+
+
+
                 if 'large' not in options.suffix:
                     ## Use 256x192 instead of 640x480
                     detection_masks = torch.nn.functional.interpolate(detection_masks[:, 80:560].unsqueeze(1), size=(192, 256), mode='nearest').squeeze(1)
@@ -255,6 +277,13 @@ def train(options):
                     depth_np = depth_np[:, 80:560]
                     pass
                 
+                noise_depth1 = torch.nn.functional.interpolate(input_pair[0]['depth'][:, 80:560].unsqueeze(1), size=(192, 256), mode='bilinear')
+                noise_depth1 = noise_depth1[:,:,3::8,3::8]
+                noise_depth1 = (noise_depth1 * torch.ones_like(noise_depth1)+torch.randn_like(noise_depth1)*0.15)
+                noise_depth1 = depth_norm(noise_depth1)
+                noise_depth1 = F.interpolate(noise_depth1, scale_factor=8, mode='bilinear')
+
+
                 depth_inv = invertDepth(depth_gt)
                 depth_inv_small = depth_inv[:, :, ::4, ::4].contiguous()
                 
@@ -273,7 +302,7 @@ def train(options):
 
 
                 ## Run the refinement network
-                results = refine_model(image, image_2, camera, masks_inp, detection_dict['detection'][:, 6:9], plane_depth, depth_np)
+                results = refine_model(image, image_2, noise_depth1, camera, masks_inp, detection_dict['detection'][:, 6:9], plane_depth, depth_np)
 
                 plane_depth_loss = torch.zeros(1).cuda()            
                 depth_loss = torch.zeros(1).cuda()

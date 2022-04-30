@@ -40,7 +40,7 @@ class RefinementBlockMask(torch.nn.Module):
        super(RefinementBlockMask, self).__init__()
        self.options = options
        use_bn = False
-       self.conv_0 = ConvBlock(3 + 5 + 2, 32, kernel_size=3, stride=1, padding=1, use_bn=use_bn)
+       self.conv_0 = ConvBlock(4 + 5 + 2, 32, kernel_size=3, stride=1, padding=1, use_bn=use_bn)
        self.conv_1 = ConvBlock(64, 64, kernel_size=3, stride=2, padding=1, use_bn=use_bn)       
        self.conv_1_1 = ConvBlock(128, 64, kernel_size=3, stride=1, padding=1, use_bn=use_bn)
        self.conv_2 = ConvBlock(128, 128, kernel_size=3, stride=2, padding=1, use_bn=use_bn)
@@ -468,7 +468,7 @@ class RefinementNet(nn.Module):
             pass
         return
     
-    def forward(self, image_1, camera, prev_result):
+    def forward(self, image_1, noise_depth1, camera, prev_result):
         masks = prev_result['mask']
 
         if 'refine_only' in self.options.suffix:
@@ -477,8 +477,9 @@ class RefinementNet(nn.Module):
         else:
             prev_predictions = torch.cat([torch.cat([prev_result['plane_depth'], prev_result['depth']], dim=1).repeat((len(masks), 1, 1, 1)), masks, (masks.sum(0, keepdim=True) - masks)[:, :1]], dim=1)
             pass
-        
-        masks, depth, plane = self.refinement_block(image_1.repeat((len(masks), 1, 1, 1)), prev_predictions, prev_result['plane'])
+
+        rgbd_1 = torch.cat((image_1, noise_depth1), 1)
+        masks, depth, plane = self.refinement_block(rgbd_1.repeat((len(masks), 1, 1, 1)), prev_predictions, prev_result['plane'])
         result = {}
 
         result = {'plane': plane, 'depth': depth}
@@ -626,7 +627,7 @@ class RefineModel(nn.Module):
         return
 
     
-    def forward(self, image_1, image_2, camera, masks, planes, plane_depth, depth_np, gt_dict={}):
+    def forward(self, image_1, image_2, noise_depth1, camera, masks, planes, plane_depth, depth_np, gt_dict={}):
         results = []
         result = {'plane': planes, 'mask': masks[:, 0], 'depth': depth_np.unsqueeze(1), 'plane_depth': depth_np.unsqueeze(1)}
         results.append(result)
@@ -654,7 +655,7 @@ class RefineModel(nn.Module):
             result = {'mask': masks, 'plane': planes, 'depth': depth_np.unsqueeze(1), 'plane_depth': depth_np.unsqueeze(1)}
             pass
 
-        result = self.refinement_net(image_1, camera, result)
+        result = self.refinement_net(image_1, noise_depth1, camera, result)
         
         results.append(result)        
         return results

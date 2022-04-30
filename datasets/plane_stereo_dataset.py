@@ -206,6 +206,15 @@ class PlaneDataset(PlaneDatasetSingle):
             print(planes.astype(np.float32).shape)
             print(segmentation.shape)
             print(plane_indices.shape)"""
+
+
+            """print("*****************")
+            print(image)
+            print(depth)
+            print(depth.shape)
+            print(image.shape)
+            np.savetxt("depth.txt", depth)
+            np.savetxt("image.txt", image[0].cpu().numpy())"""
             data_pair += [image, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, depth.astype(np.float32), extrinsics.astype(np.float32), planes.astype(np.float32), segmentation, plane_indices]
 
             if self.load_semantics or self.load_boundary:
